@@ -498,7 +498,73 @@ module Jetpants
         'Deploy the configuration to all machines.',
       )
     end
-    
+
+    desc 'shard_promote_master', 'Lockless master promotion of a shard'
+    method_option :min_id, :desc => 'Minimum ID of shard involved in master promotion'
+    method_option :max_id, :desc => 'Maximum ID of shard involved in master promotion'
+    method_option :new_master, :desc => 'New node to become master of the shard'
+    def shard_promote_master
+      s = ask_shard_being_promoted(:prep)
+      source = s.standby_slaves.last
+
+      raise "Not enough standby slaves of this shard!" unless s.standby_slaves.size >= Jetpants.standby_slaves_per_pool
+      # The new master could be a member of the shard as an extra standby slave
+      if s.standby_slaves.size > Jetpants.standby_slaves_per_pool
+        spares_available = Jetpants.topology.count_spares(like: source)
+        raise "Not enough spares available!" unless spares_available >= 1
+      end
+
+      unless new_master
+        new_master = ask_node 'Please enter the IP of the new master for #{s}'
+      end
+
+      unless s.standby_slaves.include? new_master
+        raise "New master is currently member of another pool" if new_master.pool || new_master.master || new_master.collins_pool != ''
+        puts "Cloning data set to new master"
+        source.enslave_sibling!(new_master)
+        new_master.catch_up_to_master
+      end
+
+      s.init_branched_replication new_master
+    end
+
+    desc 'shard_promote_master_reads', 'lockless master promotion step 2 of 4: move reads to new master'
+    method_option :min_id, :desc => 'Minimum ID of shard involved in master promotion'
+    method_option :max_id, :desc => 'Maximum ID of shard involved in master promotion'
+    method_option :new_master, :desc => 'New node to become master of the shard'
+    def shard_promote_master_reads
+      s = ask_shard_being_promoted :reads
+      s.move_branched_reads
+      Jetpants.topology.write_config
+    end
+    def self.after_shard_promote_master_reads
+      reminders(
+        'Commit/push the configuration in version control.',
+        'Deploy the configuration to all machines.',
+        'Wait for reads to stop on the old master.',
+        'Proceed to next step: jetpants shard_promote_master_writes'
+      )
+    end
+
+    desc 'shard_promote_master_writes', 'lockless master promotion step 3 of 4: move writes to new master'
+    def shard_promote_master_writes
+      s = ask_shard_being_promoted :writes
+      s.move_branched_writes
+      Jetpants.topology.write_config
+    end
+    def self.after_shard_promote_master_writes
+      reminders(
+        'Commit/push the configuration in version control.',
+        'Deploy the configuration to all machines.',
+        'Wait for writes to stop on the old master.',
+        'Proceed to next step: jetpants shard_promote_master_cleanup'
+      )
+    end
+
+    def shard_promote_master_cleanup
+      s = ask_shard_being_promoted :cleanup
+      s.cleanup!
+    end
     
     no_tasks do
       def is_ip? address
@@ -532,15 +598,36 @@ module Jetpants
           puts "Detected #{s} as the only shard currently involved in a split operation."
           error "Aborting." unless agree "Is this the right shard that you want to perform this action on? [yes/no]: "
         else
-          puts "The following shards are currently involved in a split operation:"
-          shards_being_split.each {|sbs| puts "* #{sbs}"}
-          puts "Which shard would you like to perform this action on?"
-          shard_min = options[:min_id] || ask('Please enter min ID of the parent shard: ')
-          shard_max = options[:max_id] || ask('Please enter max ID of the parent shard: ')
-          s = Jetpants.topology.shard shard_min, shard_max
-          raise "Shard not found" unless s
+          s = ask_shard(shards_being_split, "The following shards are currently involved in a split operation:")
         end
         raise "Shard isn't in expected state" unless s.state == :deprecated
+        s
+      end
+
+      def ask_shard_being_promoted(stage=:prep)
+        shards_being_promoted = Jetpants.shards.select {|s| [:child, :needs_cleanup].include?(s.state) && !s.parent && s.master.master}
+        if stage == :writes || stage == :cleanup
+          if shards_being_promoted.size == 0
+            raise 'No shards are currently involved in a promotion. You can only use this task after running "jetpants shard_upgrade".'
+          elsif shards_being_promoted.size == 1
+            s = shards_being_promoted.first
+            puts "Detected #{s} as the only shard currently involved in an upgrade operation."
+            error "Aborting." unless agree "Is this the right shard that you want to perform this action on? [yes/no]: "
+          else
+            s = ask_shard(shards_being_promoted, "The following shards are already involved in a promotion:")
+          end
+        end
+        s
+      end
+
+      def ask_shard(shard_list, prompt)
+        puts prompt
+        shard_list.each {|sbs| puts "* #{sbs}"}
+        puts "Which shard would you like to perform this action on?"
+        shard_min = options[:min_id] || ask('Please enter min ID of the shard: ')
+        shard_max = options[:max_id] || ask('Please enter max ID of the shard: ')
+        s = Jetpants.topology.shard shard_min, shard_max
+        raise 'Shard not found' unless s
         s
       end
     end

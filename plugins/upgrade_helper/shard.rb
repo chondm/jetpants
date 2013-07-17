@@ -28,11 +28,8 @@ module Jetpants
       # Make the 1st new slave be the "future master" which the other new
       # slaves will replicate from
       future_master = targets.shift
-      targets.each do |t|
-        future_master.pause_replication_with t
-        t.change_master_to future_master
-        [future_master, t].each {|db| db.resume_replication; db.catch_up_to_master}
-      end
+
+      init_branched_replication future_master
     end
     
     # Hack the pool configuration to send reads to the new master, but still send
@@ -43,18 +40,13 @@ module Jetpants
       slaves.each do |s|
         future_master = s if s.version_cmp(@master) == 1 && s.slaves.size == Jetpants.standby_slaves_per_pool
       end
-      raise "Shard #{self} does not have correct hierarchical replication setup to proceed" unless future_master
-      @master = future_master
-      @state = :child
-      sync_configuration
+
+      move_branched_reads future_master
     end
     
     # Move writes over to the new master
     def branched_upgrade_move_writes
-      raise "Shard #{self} in wrong state to perform this action! expected :child, found #{@state}" unless @state == :child
-      @master.disable_read_only!
-      @state = :needs_cleanup
-      sync_configuration
+      move_branched_writes
     end
     
   end

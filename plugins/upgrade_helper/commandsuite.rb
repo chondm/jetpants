@@ -193,18 +193,11 @@ module Jetpants
             s = shards_being_upgraded.first
             puts "Detected #{s} as the only shard currently involved in an upgrade operation."
             error "Aborting." unless agree "Is this the right shard that you want to perform this action on? [yes/no]: "
-            return s
           else
-            puts "The following shards are already involved in an upgrade operation:"
-            shards_being_upgraded.each {|sbu| puts "* #{sbu}"}
+            s = ask_shard(shards_being_upgraded, "The following shards are already involved in an upgrade operation:")
           end
         end
-        puts "Which shard would you like to perform this action on?"
-        shard_min = options[:min_id] || ask('Please enter min ID of the shard: ')
-        shard_max = options[:max_id] || ask('Please enter max ID of the shard: ')
-        s = Jetpants.topology.shard shard_min, shard_max
-        raise 'Shard not found' unless s
-        s
+        s 
       end
     end
     
