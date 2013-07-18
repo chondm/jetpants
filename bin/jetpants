@@ -534,6 +534,7 @@ module Jetpants
     method_option :new_master, :desc => 'New node to become master of the shard'
     def shard_promote_master_reads
       s = ask_shard_being_promoted :reads
+      new_master = s.master.slaves.last
       s.move_branched_reads
       Jetpants.topology.write_config
     end
@@ -549,7 +550,8 @@ module Jetpants
     desc 'shard_promote_master_writes', 'lockless master promotion step 3 of 4: move writes to new master'
     def shard_promote_master_writes
       s = ask_shard_being_promoted :writes
-      s.move_branched_writes
+      new_master = s.master
+      s.move_branched_writes new_master
       Jetpants.topology.write_config
     end
     def self.after_shard_promote_master_writes

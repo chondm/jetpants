@@ -329,6 +329,31 @@ module Jetpants
       end
       true
     end
+
+    # sets up the hierarchical replication to begin a branched master promotion
+    def init_branched_replication(new_master)
+      standby_slaves.each do |slave|
+        next if slave == new_master
+        new_master.pause_replication_with slave
+        slave.change_master_to new_master
+        [new_master, slave].each {|db| db.resume_replication; db.catch_up_to_master}
+      end
+    end
+
+    # Move reads to the new master in a lockless master promotion
+    def move_branched_reads(new_master)
+      @master = new_master
+      @state = :child
+      sync_configuration
+    end
+
+    # Move writes over to the new master
+    def move_branched_writes
+      raise "Shard #{self} in wrong state to perform this action! expected :child, found #{@state}" unless @state == :child
+      @master.disable_read_only!
+      @state = :needs_cleanup
+      sync_configuration
+    end
     
     
     ###### Private methods #####################################################
@@ -386,31 +411,6 @@ module Jetpants
       source.enslave_siblings! targets
     end
 
-    # sets up the hierarchical replication to 
-    def init_branched_replication(new_master)
-      standby_slaves.each do |slave|
-        next if slave == new_master
-        new_master.pause_replication_with slave
-        slave.change_master_to future_master
-        [new_master, slave].each {|db| db.resume_replication; db.catch_up_to_master}
-      end
-    end
-
-    # Move reads to the new master in a lockless master promotion
-    def move_branched_reads new_master
-      @master = new_master
-      @state = :child
-      sync_configuration
-    end
-
-    # Move writes over to the new master
-    def move_branched_writes
-      raise "Shard #{self} in wrong state to perform this action! expected :child, found #{@state}" unless @state == :child
-      @master.disable_read_only!
-      @state = :needs_cleanup
-      sync_configuration
-    end
-    
   end
 end
 
