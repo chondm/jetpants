@@ -563,6 +563,7 @@ module Jetpants
       )
     end
 
+    desc 'shard_promote_master_cleanup', 'lockless master promotion step 4 of 4: clean up shard and eject old master'
     def shard_promote_master_cleanup
       s = ask_shard_being_promoted :cleanup
       s.cleanup!
